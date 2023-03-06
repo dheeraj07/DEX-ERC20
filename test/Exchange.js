@@ -41,7 +41,7 @@ describe("Exchange", () => {
     {
         let transaction, amount = tokens(100), response;
 
-        describe("success", () => 
+        describe("Success", () => 
         {
             beforeEach(async () => 
             {
@@ -66,7 +66,7 @@ describe("Exchange", () => {
               });
         });
 
-        describe("failure", () => 
+        describe("Failure", () => 
         {
             it("Deposit without enough balance", async () => 
             {
@@ -86,7 +86,7 @@ describe("Exchange", () => {
     {
         let transaction, amount = tokens(100), response;
         
-        describe("success", () => 
+        describe("Success", () => 
         {
             beforeEach(async () => 
             {
@@ -119,7 +119,7 @@ describe("Exchange", () => {
               });
         });
 
-        describe("failure", () => 
+        describe("Failure", () => 
         {
             it("Check if withdrawal is possible without any deposit", async () => 
             {
@@ -132,7 +132,7 @@ describe("Exchange", () => {
     describe("Orders", () => 
     {
         let transaction, amount = tokens(100), response;
-        describe("success", () => 
+        describe("Success", () => 
         {
             beforeEach(async() => 
             {
@@ -190,7 +190,7 @@ describe("Exchange", () => {
                     response = await transaction.wait();
                 });
 
-                it("check if the order is successfully cancelled", async () => 
+                it("Check if the order is successfully cancelled", async () => 
                 {
                     expect(await exchangeContractDeployed.ordersCancelled(1)).to.equal(true);
                 });
@@ -210,7 +210,7 @@ describe("Exchange", () => {
 
             describe("Failure", () => 
             {
-                it("check if only the real order owner is able to cancel the order", async () => 
+                it("Check if only the real order owner is able to cancel the order", async () => 
                 {
                     await expect(exchangeContractDeployed.cancelOrder(1)).revertedWith("Insufficient privileages.");
                 });

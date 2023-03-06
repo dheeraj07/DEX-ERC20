@@ -23,7 +23,7 @@ describe("token", () => {
         [deployer, user, exchange] = await ethers.getSigners();
     });
     
-    describe("deployment", () => 
+    describe("Deployment", () => 
     {
         it("It has a name", async() => 
         {
@@ -31,24 +31,24 @@ describe("token", () => {
             expect(tokenName).to.equal(name);
         });
 
-        it("HAS CORRECT SYMBOL", async () => 
+        it("Has Correct Symbol", async () => 
         {
             const symbol = await token.symbol();
             expect(symbol).to.equal(symbol);
         });
 
-        it("HAS CORRECT DECIMALS", async () => 
+        it("Has Correct Decimals", async () => 
         {
             const decimals = await token.decimals();
             expect(decimals).to.equal(decimalPlaces);
         });
 
-        it("HAS CORRECT TOTAL SUPPLY", async () => 
+        it("Has Correct Total Supply", async () => 
         {
             expect(await token.totalSupply()).to.equal(value);
         });
 
-        it("HAS assigned TOTAL SUPPLY to the caller", async () => 
+        it("Has assigned Total Supply to the caller", async () => 
         {
             expect(await token.balanceOf(deployer.address)).to.equal(value);
         });
@@ -66,7 +66,7 @@ describe("token", () => {
         })
 
 
-        describe("success", () => 
+        describe("Success", () => 
         {
             it("Checking the transfer", async()=>
             {
@@ -83,7 +83,7 @@ describe("token", () => {
             }); 
         });
         
-        describe("failure", () => 
+        describe("Failure", () => 
         {
             it("Sending more than required tokens", async ()=>
             {
@@ -111,14 +111,14 @@ describe("token", () => {
             result = await transaction.wait();
         });
 
-        describe("success", () => 
+        describe("Success", () => 
         {
             it("Check if allowance is assigned for token spending", async () => 
             {
                 expect(await token.allowances(deployer.address, exchange.address)).to.equal(tokens(100));
             });
 
-            it("check the approaval event logs", async () => 
+            it("Check the approaval event logs", async () => 
             {
                 const events = result.events[0];
 
@@ -129,9 +129,9 @@ describe("token", () => {
         });
 
 
-        describe("failure", () => 
+        describe("Failure", () => 
         {
-            it("Reject invalid receipent", async ()=>
+            it("Rejects invalid receipent", async ()=>
             {
                 const sendTokens = tokens(10000);
                 await expect(token.connect(deployer).approve('0x0000000000000000000000000000000000000000', sendTokens)).to.be.reverted;
@@ -151,7 +151,7 @@ describe("token", () => {
             result = await transaction.wait();
         });
 
-        describe('success', ()=>
+        describe('Success', ()=>
         {
             beforeEach(async () => 
             {
@@ -159,12 +159,12 @@ describe("token", () => {
                 result = await transaction.wait();
             });
 
-            it("check transfer",async () => 
+            it("Check transfer",async () => 
             {
                 expect(await token.balanceOf(deployer.address)).to.equal(tokens("9900"));
             });
 
-            it("resets the token allowance",async () => 
+            it("Resets the token allowance",async () => 
             {
                 expect(await token.allowances(deployer.address, exchange.address)).to.equal(0);
             });
@@ -180,7 +180,7 @@ describe("token", () => {
         });
 
 
-        describe('failure', ()=>
+        describe('Failure', ()=>
         {
             it("Invalid transfer", async () => 
             {
