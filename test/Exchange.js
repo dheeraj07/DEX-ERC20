@@ -1,5 +1,5 @@
-const { ethers } = require("hardhat");
-const { expect} = require("chai");
+const { ethers, upgrades } = require("hardhat");
+const { expect } = require("chai");
 
 const convertToWei = (inp) => 
 {
@@ -21,8 +21,7 @@ describe("Exchange", () => {
         deployedToken1 = await tokenContract.deploy("10000"); 
         deployedToken2 = await tokenContract.deploy("10000"); 
 
-        exchangeContractDeployed = await exchangeContract.deploy(feeAccount.address, feePercent);
-        
+        exchangeContractDeployed = await upgrades.deployProxy(exchangeContract, [feeAccount.address, feePercent], {kind: 'uups'});  
     });
     
     describe("Deployment", () => 

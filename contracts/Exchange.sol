@@ -5,8 +5,11 @@ import "hardhat/console.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-contract Exchange is Ownable{
+contract Exchange is Initializable, OwnableUpgradeable, UUPSUpgradeable{
     using Counters for Counters.Counter;
 
     struct Market
@@ -85,11 +88,21 @@ contract Exchange is Ownable{
         uint _timestamp
     );
 
-    constructor(address _feeAccount, uint _feePercent)
+    function initialize(address _feeAccount, uint _feePercent) 
+    initializer 
+    public
     {
+        __Ownable_init();
+        __UUPSUpgradeable_init();
         feeAccount = _feeAccount;
         feePercent = _feePercent;
     }
+
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        onlyOwner
+        override
+    {}
 
     modifier isMarketActive(string memory _market) 
     {
