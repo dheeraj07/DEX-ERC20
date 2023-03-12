@@ -39,6 +39,7 @@ contract Exchange is Ownable{
     mapping(address => mapping(address => uint)) public userBalances;
     mapping(string => mapping(uint => Order[])) public orderBook;
     mapping(string => Market) public marketsTraded;
+    mapping(address => mapping(address => uint)) public pendingOrders;
     Counters.Counter public ordersCounter;
     Counters.Counter public tradesCounter;
 
@@ -78,32 +79,44 @@ contract Exchange is Ownable{
         uint _timestamp
     );
 
+    event CancelEve(
+        uint _orderId,
+        address _trader,
+        uint _timestamp
+    );
+
     constructor(address _feeAccount, uint _feePercent)
     {
         feeAccount = _feeAccount;
         feePercent = _feePercent;
     }
 
-    modifier isMarketActive(string memory market) 
+    modifier isMarketActive(string memory _market) 
     {
-        Market memory info = marketsTraded[market];
+        Market memory info = marketsTraded[_market];
         Market memory defaultInfo = Market(address(0), address(0));
         require(keccak256(abi.encode(info)) != keccak256(abi.encode(defaultInfo)), "Invalid Market Specified.");
         _;
     }
 
-    function RegisterMarket(address parentToken, address childToken, string memory parentTokenSymbol, string memory childTokenSymbol) 
-    public
-    onlyOwner
+    modifier isBalanceInvolvedInTransaction(address _owner, address _token, uint _amount)
     {
-        string memory marketName = string(abi.encodePacked(parentTokenSymbol, childTokenSymbol));
-        marketsTraded[marketName] = Market(parentToken, childToken);
+        require((userBalances[_token][_owner] >= _amount) && ((userBalances[_token][_owner] - pendingOrders[_token][_owner]) >= _amount),"Cannot process this transaction due to pending orders.");
+        _;
     }
 
-    function isMarketEnabled(string memory market)
+    function RegisterMarket(address _parentToken, address _tradeToken, string memory _parentTokenSymbol, string memory _tradeTokenSymbol) 
+    onlyOwner
+    public
+    {
+        string memory marketName = string(abi.encodePacked(_parentTokenSymbol, _tradeTokenSymbol));
+        marketsTraded[marketName] = Market(_parentToken, _tradeToken);
+    }
+
+    function isMarketEnabled(string memory _market)
+    isMarketActive(_market)
     public
     view
-    isMarketActive(market)
     returns(bool)
     {
         return true;
@@ -120,19 +133,22 @@ contract Exchange is Ownable{
         emit DepositEve(_token, msg.sender, _amount);
     }
 
-    function withdrawTokens(address _token, uint _amount) 
+    function withdrawTokens(address _token, uint _amount)
+    isBalanceInvolvedInTransaction(msg.sender, _token, _amount)
     public
     {
         withdraw(_token, msg.sender, _amount);
     }
 
-    function withdrawToThirdParty(address _token, address _receiver, uint _amount) 
+    function withdrawToThirdParty(address _token, address _receiver, uint _amount)
+    isBalanceInvolvedInTransaction(msg.sender, _token, _amount)
     public
     {
         withdraw(_token, _receiver, _amount);
     }
 
-    function withdraw(address _token, address _receiver, uint _amount) 
+    function withdraw(address _token, address _receiver, uint _amount)
+    isBalanceInvolvedInTransaction(msg.sender, _token, _amount)
     internal
     {
         require(userBalances[_token][msg.sender] >= _amount, "Insufficient balance.");
@@ -140,6 +156,18 @@ contract Exchange is Ownable{
         userBalances[_token][msg.sender] -= _amount;
         IERC20(_token).transfer(_receiver, _amount);
         emit WithdrawEve(_token, _receiver, _amount);
+    }
+
+    function restrictTradeAction(address _owner, address _token, uint _amount)
+    internal
+    view
+    returns(bool)
+    {
+        if((userBalances[_token][_owner] < _amount) || (userBalances[_token][_owner] - pendingOrders[_token][_owner]) < _amount)
+        {
+            return true;
+        }
+        return false;
     }
 
     function balanceOf(address _token, address _user) 
@@ -150,80 +178,76 @@ contract Exchange is Ownable{
         return userBalances[_token][_user];
     }
 
-    function getOrderBookLength(Trade side, string memory market)
+    function getOrderBookLength(Trade _side, string memory _market)
     public
     view
     returns(uint)
     {
-        return orderBook[market][uint(side)].length;
+        return orderBook[_market][uint(_side)].length;
     }
 
-    function limitOrder(uint amount, uint price, Trade side, string memory market) 
-    isMarketActive(market)
+    function limitOrder(uint _amount, uint _price, Trade _side, string memory _market) 
+    isMarketActive(_market)
     public
     {
-        Market memory info = marketsTraded[market];
-        address parentToken = info._parentToken;
-        address tradeToken = info._tradeToken;
-
-        if(side == Trade.SELL)
+        Market memory currentMarket = marketsTraded[_market];
+        if(_side == Trade.SELL)
         {
-            require(userBalances[parentToken][msg.sender] >= amount, "Insufficient balance.");
+            require(!restrictTradeAction(msg.sender, currentMarket._parentToken, _amount), "Cannot process this transaction due to pending orders.");
+            pendingOrders[currentMarket._parentToken][msg.sender] += _amount;
         }
-        else if(side == Trade.BUY)
+        else if(_side == Trade.BUY)
         {
-            require(userBalances[tradeToken][msg.sender] >= amount, "Insufficient balance.");
+            require(!restrictTradeAction(msg.sender, currentMarket._tradeToken, _amount), "Cannot process this transaction due to pending orders.");
+            pendingOrders[currentMarket._tradeToken][msg.sender] += ((_amount * _price)/(10 ** 18)); 
         }
 
-        Order[] storage orders = orderBook[market][uint(side)];
+        Order[] storage orders = orderBook[_market][uint(_side)];
         ordersCounter.increment();
         orders.push(Order(
             ordersCounter.current(),
             msg.sender,
-            side,
-            parentToken,
-            tradeToken,
-            amount,
+            _side,
+            currentMarket._parentToken,
+            currentMarket._tradeToken,
+            _amount,
             0,
-            price,
+            _price,
             block.timestamp
         ));
-        sortTheArrayOrders(market, side);
-        emit OrderBookEve(orderBook[market][uint(side)]);
+        sortTheArrayOrders(_market, _side);
+        emit OrderBookEve(orderBook[_market][uint(_side)]);
         emit OrderEve(
         ordersCounter.current(),
         msg.sender,
-        parentToken,
-        tradeToken,
-        amount,
-        price,
+        currentMarket._parentToken,
+        currentMarket._tradeToken,
+        _amount,
+        _price,
         block.timestamp
         );
     }
 
-    function marketOrder(uint amount, Trade side, string memory market) 
-    isMarketActive(market)
+    function marketOrder(uint _amount, uint _price, Trade _side, string memory _market) 
+    isMarketActive(_market)
     public
     {
-        Market memory info = marketsTraded[market];
-        address parentToken = info._parentToken;
-        address tradeToken = info._tradeToken;
-
-        if(side == Trade.SELL)
+        Market memory currentMarket = marketsTraded[_market];
+        if(_side == Trade.SELL)
         {
-            require(userBalances[parentToken][msg.sender] >= amount, "Insufficient balance.");
+            require(userBalances[currentMarket._parentToken][msg.sender] >= _amount, "Insufficient balance.");
         }
-        else if(side == Trade.BUY)
+        else if(_side == Trade.BUY)
         {
-            uint currentMarketPrice = getMarketPrice(market, Trade.SELL);
-            require(userBalances[tradeToken][msg.sender] >= (currentMarketPrice <= 0 ? amount :((currentMarketPrice * amount)/(10 ** 18))), "Insufficient balance.");
+            uint currentMarketPrice = getMarketPrice(_market, Trade.SELL);
+            require(userBalances[currentMarket._tradeToken][msg.sender] >= (currentMarketPrice <= 0 ? _amount :((currentMarketPrice * _amount)/(10 ** 18))), "Insufficient balance.");
         }
 
-        Order[] storage orders = orderBook[market][uint(side == Trade.SELL ? Trade.BUY : Trade.SELL)];
-        uint i;
-        uint remaining = amount;
+        Order[] storage orders = orderBook[_market][uint(_side == Trade.SELL ? Trade.BUY : Trade.SELL)];
+        uint i = 0;
+        uint remaining = _amount;
         uint feeAmount;
-        uint lastPrice;
+        uint originalOrdersLength = orders.length;
 
         while(i < orders.length && remaining > 0)
         {
@@ -231,34 +255,39 @@ contract Exchange is Ownable{
             uint available = orders[i]._amount - orders[i]._filled;
             uint matched = (remaining > available) ? available : remaining;
             feeAmount = ((((matched * orders[i]._price)/(10 ** 18)) * feePercent)/(10 ** 20));
-            lastPrice = orders[i]._price;
-            if(side == Trade.SELL)
+            if(_side == Trade.SELL)
             {
-                if(userBalances[parentToken][msg.sender] < matched)
+                require(!restrictTradeAction(msg.sender, currentMarket._parentToken, matched) && (originalOrdersLength == orders.length), "Cannot process this transaction due to pending orders.");
+                if(restrictTradeAction(msg.sender, currentMarket._parentToken, matched))
                 {
                     break;
                 }
 
-                userBalances[parentToken][msg.sender] -= matched;
-                userBalances[tradeToken][msg.sender] += (((matched * orders[i]._price)/(10 ** 18)) - feeAmount);
-                userBalances[tradeToken][feeAccount] += feeAmount;
+                pendingOrders[currentMarket._tradeToken][orders[i]._trader] -= ((matched * orders[i]._price)/(10 ** 18));
 
-                userBalances[parentToken][orders[i]._trader] += matched;
-                userBalances[tradeToken][orders[i]._trader] -= ((matched * orders[i]._price)/(10 ** 18));
+                userBalances[currentMarket._parentToken][msg.sender] -= matched;
+                userBalances[currentMarket._tradeToken][msg.sender] += (((matched * orders[i]._price)/(10 ** 18)) - feeAmount);
+                userBalances[currentMarket._tradeToken][feeAccount] += feeAmount;
+
+                userBalances[currentMarket._parentToken][orders[i]._trader] += matched;
+                userBalances[currentMarket._tradeToken][orders[i]._trader] -= ((matched * orders[i]._price)/(10 ** 18));
             }
-            else if(side == Trade.BUY)
+            else if(_side == Trade.BUY)
             {
-                if(userBalances[tradeToken][msg.sender] < ((matched * orders[i]._price)/(10 ** 18)))
+                require(!restrictTradeAction(msg.sender, currentMarket._tradeToken, ((matched * orders[i]._price)/(10 ** 18))) && (originalOrdersLength == orders.length), "Cannot process this transaction due to pending orders.");
+                if(restrictTradeAction(msg.sender, currentMarket._tradeToken, (matched * orders[i]._price)/(10 ** 18)))
                 {
                     break;
                 }
 
-                userBalances[parentToken][msg.sender] += (matched - feeAmount) ;
-                userBalances[parentToken][feeAccount] += feeAmount;
-                userBalances[tradeToken][msg.sender] -= ((matched * orders[i]._price)/(10 ** 18));
+                pendingOrders[currentMarket._parentToken][orders[i]._trader] -= matched;
 
-                userBalances[parentToken][orders[i]._trader] -= matched;
-                userBalances[tradeToken][orders[i]._trader] += ((matched * orders[i]._price)/(10 ** 18));
+                userBalances[currentMarket._parentToken][msg.sender] += (matched - feeAmount);
+                userBalances[currentMarket._parentToken][feeAccount] += feeAmount;
+                userBalances[currentMarket._tradeToken][msg.sender] -= ((matched * orders[i]._price)/(10 ** 18));
+
+                userBalances[currentMarket._parentToken][orders[i]._trader] -= matched;
+                userBalances[currentMarket._tradeToken][orders[i]._trader] += ((matched * orders[i]._price)/(10 ** 18));
             }
             remaining = remaining - matched;
             orders[i]._filled += matched;
@@ -274,7 +303,7 @@ contract Exchange is Ownable{
             );
             i++;
         }
-        emit OrderBookEve(orderBook[market][uint(side)]);
+        emit OrderBookEve(orderBook[_market][uint(_side)]);
         i = 0;
         while(i < orders.length && orders[i]._filled == orders[i]._amount)
         {
@@ -284,84 +313,103 @@ contract Exchange is Ownable{
             }
             orders.pop();
         }
-        //Need to handle logic for market -> limit order price
         if(remaining > 0)
         {
-            limitOrder(amount, lastPrice, side, market);
+            limitOrder(_amount, _price, _side, _market);
         }
     }
 
-    function getMarketPrice(string memory market, Trade side)
+    function getMarketPrice(string memory _market, Trade _side)
     internal
     view
     returns(uint)
     {
-        if(getOrderBookLength(side, market) > 0)
+        if(getOrderBookLength(_side, _market) > 0)
         {
-            return orderBook[market][uint(side)][0]._price;
+            return orderBook[_market][uint(_side)][0]._price;
         }
         return 0;
     }
 
-    function sortTheArrayOrders(string memory info, Trade side) 
+    function sortTheArrayOrders(string memory _market, Trade _side) 
     internal
     {
-        Order[] storage orders = orderBook[info][uint(side)];
-        if(side == Trade.SELL)
+        Order[] storage orders = orderBook[_market][uint(_side)];
+        if(_side == Trade.SELL)
         {
             quickSort(orders, int(0), int(orders.length - 1), false);
         }
-        else if(side == Trade.BUY)
+        else if(_side == Trade.BUY)
         {
             quickSort(orders, int(0), int(orders.length - 1), true);
         }
         
     }
 
-    function quickSort(Order[] storage arr, int left, int right, bool isBuy) 
+    function quickSort(Order[] storage _arr, int _left, int _right, bool _isBuy) 
     internal
     {
-        int i = left;
-        int j = right;
+        int i = _left;
+        int j = _right;
         if (i == j) return;
-        uint pivot = arr[uint(left + (right - left) / 2)]._price;
+        uint pivot = _arr[uint(_left + (_right - _left) / 2)]._price;
         while (i <= j) 
         {
-            if (isBuy) 
+            if (_isBuy) 
             {
-                while (arr[uint(i)]._price > pivot) i++;
-                while (pivot > arr[uint(j)]._price) j--;
+                while (_arr[uint(i)]._price > pivot) i++;
+                while (pivot > _arr[uint(j)]._price) j--;
             } 
             else 
             {
-                while (arr[uint(i)]._price < pivot) i++;
-                while (pivot < arr[uint(j)]._price) j--;
+                while (_arr[uint(i)]._price < pivot) i++;
+                while (pivot < _arr[uint(j)]._price) j--;
             }
             if (i <= j) 
             {
-                Order memory val = arr[uint(i)];
-                arr[uint(i)] = arr[uint(j)];
-                arr[uint(j)] = val;
+                Order memory val = _arr[uint(i)];
+                _arr[uint(i)] = _arr[uint(j)];
+                _arr[uint(j)] = val;
                 i++;
                 j--;
             }
         }
-        if (left < j)
+        if (_left < j)
         {
-            quickSort(arr, left, j, isBuy);
+            quickSort(_arr, _left, j, _isBuy);
         }
-        if (i < right)
+        if (i < _right)
         {
-            quickSort(arr, i, right, isBuy);
+            quickSort(_arr, i, _right, _isBuy);
         }
     }
+
+    function cancelOrder(uint _orderId, Trade _side, string memory _market)
+    public
+    returns(bool)
+    {
+        require(_orderId <= ordersCounter.current(), "Invalid Order.");
+        Order[] storage orders = orderBook[_market][uint(_side)];
+        uint i = 0;
+        uint initialOrderBooklength = orders.length;
+        while(i < orders.length)
+        {
+            if(orders[i]._orderId == _orderId)
+            {
+                require(orders[i]._filled == 0 && orders[i]._trader == msg.sender, "Not authorized to cancel this order.");
+                if(i != orders.length - 1)
+                {
+                    for(uint j = i; j < orders.length - 1; j++)
+                    {
+                        orders[j] = orders[j+1];
+                    }
+                }
+                orders.pop();
+                emit CancelEve(_orderId, msg.sender, block.timestamp);
+                break;
+            }
+            i++;
+        }
+        return initialOrderBooklength == orders.length+1;
+    }
 }
-/*
-Todo:
-1. Check if there are any pending orders before processing any withdrawls/new-trades or orders
-2. When cancelling the order, make sure if the order is not partially fullfilled. 
-3. Merge the same price orders
-4. Enable trading with ETH <-> ERC20
-5. Store Fullfilled Trades
-6. Cnacel Trades functionality
-*/

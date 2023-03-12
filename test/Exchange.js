@@ -1,16 +1,16 @@
 const { ethers } = require("hardhat");
 const { expect} = require("chai");
-const { result } = require("lodash");
 
-const tokens = (inp) => 
+const convertToWei = (inp) => 
 {
     return ethers.utils.parseUnits(inp.toString(), "ether");
 }
+const SELL = 1, BUY = 0;
 
 describe("Exchange", () => {
 
     let deployer, feeAccount, exchangeContractDeployed, trader1, trader2, trader3, deployedToken1, deployedToken2;
-    const feePercent = tokens(10);
+    const feePercent = convertToWei(10);
 
     beforeEach(async () => 
     {
@@ -40,7 +40,7 @@ describe("Exchange", () => {
     
     describe("Deposits", () => 
     {
-        let transaction, amount = tokens(100), response;
+        let transaction, amount = convertToWei(100), response;
 
         describe("Success", () => 
         {
@@ -85,7 +85,7 @@ describe("Exchange", () => {
 
     describe("Withdraw", () => 
     {
-        let transaction, amount = tokens(100), response;
+        let transaction, amount = convertToWei(100), response;
         
         describe("Success", () => 
         {
@@ -124,7 +124,7 @@ describe("Exchange", () => {
         {
             it("Check if withdrawal is possible without any deposit", async () => 
             {
-                await expect(exchangeContractDeployed.connect(trader1).withdrawTokens(deployedToken1.address, amount)).revertedWith("Insufficient balance.");
+                await expect(exchangeContractDeployed.connect(trader1).withdrawTokens(deployedToken1.address, amount)).revertedWith("Cannot process this transaction due to pending orders.");
             });
         });
     });
@@ -155,7 +155,7 @@ describe("Exchange", () => {
 
     describe("Order Types", () => 
     {
-        let transaction, amount = tokens(100), response;
+        let transaction, amount = convertToWei(100), response;
         beforeEach(async() => 
         {
             await deployedToken1.connect(deployer).transfer(trader1.address, amount);
@@ -177,21 +177,21 @@ describe("Exchange", () => {
     
                 it("Check if the limit sell order is getting placed", async () => 
                 {
-                    await exchangeContractDeployed.connect(trader1).limitOrder(tokens(15), tokens(8), 1, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(15), convertToWei(8), SELL, "MINAUSDT");
                     
-                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(1, "MINAUSDT")).to.equal(1);
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(SELL, "MINAUSDT")).to.equal(1);
                 });
 
                 it("Check if the limit buy order is getting placed", async () => 
                 {
-                    await exchangeContractDeployed.connect(trader2).limitOrder(tokens(10), tokens(2), 0, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader2).limitOrder(convertToWei(10), convertToWei(2), BUY, "MINAUSDT");
                     
-                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(0, "MINAUSDT")).to.equal(1);
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(BUY, "MINAUSDT")).to.equal(1);
                 });
 
                 it("Check if the order event is emitted", async () => 
                 {
-                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(15),tokens(8), 1, "MINAUSDT");
+                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(15),convertToWei(8), 1, "MINAUSDT");
                     response = await transaction.wait();
 
                     const events = response.events;
@@ -205,17 +205,17 @@ describe("Exchange", () => {
             {
                 it("Check if the limit buy order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader1).limitOrder(tokens(15), tokens(8), 0, "MINAUSDT")).revertedWith("Insufficient balance.");
+                    await expect(exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(15), convertToWei(8), BUY, "MINAUSDT")).revertedWith("Cannot process this transaction due to pending orders.");
                 });
 
                 it("Check if the limit sell order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader2).limitOrder(tokens(8), tokens(8), 1, "MINAUSDT")).revertedWith("Insufficient balance.");
+                    await expect(exchangeContractDeployed.connect(trader2).limitOrder(convertToWei(8), convertToWei(8), SELL, "MINAUSDT")).revertedWith("Cannot process this transaction due to pending orders.");
                 });
 
                 it("Check if only the valid markets are allowed for trading", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader2).limitOrder(tokens(8), tokens(8), 1, "ETHUSDT")).revertedWith("Invalid Market Specified.");
+                    await expect(exchangeContractDeployed.connect(trader2).limitOrder(convertToWei(8), convertToWei(8), SELL, "ETHUSDT")).revertedWith("Invalid Market Specified.");
                 });
             });
         });
@@ -230,58 +230,107 @@ describe("Exchange", () => {
                     await deployedToken2.connect(deployer).transfer(trader2.address, amount);
                     await deployedToken2.connect(trader2).approve(exchangeContractDeployed.address, amount);
                     await exchangeContractDeployed.connect(trader2).depositToken(deployedToken2.address, amount);
-
-                    await exchangeContractDeployed.connect(trader2).limitOrder(tokens(8), tokens(3), 0, "MINAUSDT");                    
-                    await exchangeContractDeployed.connect(trader1).limitOrder(tokens(17), tokens(9), 1, "MINAUSDT");
-                    await exchangeContractDeployed.connect(trader1).limitOrder(tokens(10), tokens(2), 1, "MINAUSDT");
                 });
                 it("Check if the market sell order is getting placed and removed from the order book once fullfilled", async () => 
                 {
-                    await exchangeContractDeployed.connect(trader1).marketOrder(tokens(8), 1, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader2).limitOrder(convertToWei(8), convertToWei(3), BUY, "MINAUSDT"); 
+                    await exchangeContractDeployed.connect(trader1).marketOrder(convertToWei(8), convertToWei(2),  SELL, "MINAUSDT");
                     
-                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(0, "MINAUSDT")).to.equal(0);
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(BUY, "MINAUSDT")).to.equal(0);
                 });
 
                 it("Check if the market buy order is getting placed and removed from the order book once fullfilled", async () => 
                 {
-                    await exchangeContractDeployed.connect(trader2).marketOrder(tokens(10), 0, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(17), convertToWei(9), SELL, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(10), convertToWei(2), SELL, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader2).marketOrder(convertToWei(10), convertToWei(1), BUY, "MINAUSDT");
 
-                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(1, "MINAUSDT")).to.equal(1);
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(SELL, "MINAUSDT")).to.equal(1);
+                });
+
+                it("Check if the current market order is placed as limit order if there are counter party market orders", async () => 
+                {
+                    await exchangeContractDeployed.connect(trader2).marketOrder(convertToWei(10), convertToWei(2), BUY, "MINAUSDT");
+
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(BUY, "MINAUSDT")).to.equal(1);
                 });
 
                 it("Check if the order event is emitted", async () => 
                 {
-                    transaction = await exchangeContractDeployed.connect(trader2).marketOrder(tokens(10), 0, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(17), convertToWei(9), SELL, "MINAUSDT");
+                    transaction = await exchangeContractDeployed.connect(trader2).marketOrder(convertToWei(10), convertToWei(4), BUY, "MINAUSDT");
                     response = await transaction.wait();
 
                     const events = response.events;
                     expect(events[0].event).to.equal("TradeEve");
                 });
-    
-                it("Check the market order", async () => 
-                {
-                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(10), tokens(16), 1, "MINAUSDT");
-                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(5), tokens(10), 1, "MINAUSDT");
-                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(2), tokens(12), 1, "MINAUSDT");
-                });
-    
             });
 
             describe("Failure", () => 
             {
                 it("Check if the market buy order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader1).marketOrder(tokens(15), 0, "MINAUSDT")).revertedWith("Insufficient balance.");
+                    await expect(exchangeContractDeployed.connect(trader1).marketOrder(convertToWei(15), convertToWei(3), BUY, "MINAUSDT")).revertedWith("Insufficient balance.");
                 });
 
                 it("Check if the market sell order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader2).marketOrder(tokens(26), 1, "MINAUSDT")).revertedWith("Insufficient balance.");
+                    await expect(exchangeContractDeployed.connect(trader2).marketOrder(convertToWei(26), convertToWei(3), SELL, "MINAUSDT")).revertedWith("Insufficient balance.");
                 });
 
                 it("Check if only the valid markets are allowed for trading", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader2).marketOrder(tokens(8), 1, "ETHUSDT")).revertedWith("Invalid Market Specified.");
+                    await expect(exchangeContractDeployed.connect(trader2).marketOrder(convertToWei(8), convertToWei(1), SELL, "ETHUSDT")).revertedWith("Invalid Market Specified.");
+                });
+            });
+        });
+
+        describe("Cancelling Orders", () =>
+        {
+            beforeEach( async () => 
+            {
+                await deployedToken2.connect(deployer).transfer(trader2.address, amount);
+                await deployedToken2.connect(trader2).approve(exchangeContractDeployed.address, amount);
+                await exchangeContractDeployed.connect(trader2).depositToken(deployedToken2.address, amount);
+
+                await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(17), convertToWei(9), SELL, "MINAUSDT");
+                await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(10), convertToWei(2), SELL, "MINAUSDT");
+                await exchangeContractDeployed.connect(trader1).limitOrder(convertToWei(3), convertToWei(4), SELL, "MINAUSDT");
+            });
+            describe("Success", () => 
+            {
+                it("Check if the order is successfully cancelled", async () => 
+                {
+                    transaction = await exchangeContractDeployed.connect(trader1).cancelOrder(3, SELL, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).cancelOrder(3, SELL, "MINAUSDT");
+                    response = await transaction.wait();
+
+                    expect(response.events[0].event).to.equal("CancelEve");
+                    expect(response.events[0].args._orderId).to.equal(3);
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(SELL, "MINAUSDT")).to.equal(2);
+                });
+                
+                it("Check if multiple cancellation requests of the same order have any effect on the orderbook", async () => 
+                {
+                    await exchangeContractDeployed.connect(trader1).cancelOrder(3, SELL, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).cancelOrder(3, SELL, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).cancelOrder(3, SELL, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).cancelOrder(3, SELL, "MINAUSDT");
+
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(SELL, "MINAUSDT")).to.equal(2);
+                });
+            });
+
+            describe("Failure", () => 
+            {
+                it("Check if only the real order owner is able to cancel the order", async () => 
+                {
+                    await expect(exchangeContractDeployed.connect(trader2).cancelOrder(3, SELL, "MINAUSDT")).revertedWith("Not authorized to cancel this order.");
+                });
+
+                it("Rejects invalid order_id's", async () => 
+                {
+                    await expect(exchangeContractDeployed.cancelOrder(18, SELL, "MINAUSDT")).revertedWith("Invalid Order.");
                 });
             });
         });
