@@ -4,24 +4,43 @@ pragma solidity ^0.8.1;
 import "hardhat/console.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-/*
-Todo:
-1. Check if there are any pending orders before withdrawl.
-2. Allow partial order fullfills.
-3. When cancelling the order, make sure if the order is not partially fullfilled. 
-*/
-
-contract Exchange{
+contract Exchange is Ownable{
     using Counters for Counters.Counter;
+
+    struct Market
+    {
+        address _parentToken;
+        address _tradeToken;
+    }
+
+    struct Order
+    {
+        uint _orderId;
+        address _trader;
+        Trade side;
+        address _parentToken;
+        address _tradeToken;
+        uint _amount;
+        uint _filled;
+        uint _price;
+        uint _timestamp;
+    }
+
+    enum Trade
+    {
+        BUY,
+        SELL
+    }
 
     address public feeAccount;
     uint public feePercent;
     mapping(address => mapping(address => uint)) public userBalances;
-    mapping(uint => bool) public ordersCancelled;
-    mapping(uint => bool) public ordersFilled;
-    mapping(uint => Order) ordersInfo;
+    mapping(string => mapping(uint => Order[])) public orderBook;
+    mapping(string => Market) public marketsTraded;
     Counters.Counter public ordersCounter;
+    Counters.Counter public tradesCounter;
 
     event DepositEve(
         address _tokenAddress, 
@@ -38,50 +57,56 @@ contract Exchange{
     event OrderEve(
         uint _orderId,
         address _trader,
-        address _tokenBuy,
-        address _tokenSell,
-        uint _amountBuy,
-        uint _amountSell,
+        address _parentToken,
+        address _tradeToken,
+        uint _amount,
+        uint _price,
         uint _timestamp
     );
 
-    event CancelEve(
-        uint _orderId,
-        address _trader,
-        address _tokenBuy,
-        address _tokenSell,
-        uint _amountBuy,
-        uint _amountSell,
-        uint _timestamp
+    event OrderBookEve(
+        Order[]
     );
 
     event TradeEve(
         uint _orderId,
-        address _orderMaker,
-        address _orderTaker,
-        address _tokenBuy,
-        address _tokenSell,
-        uint _amountBuy,
+        uint _tradeId,
+        address _trader,
+        address _counterParty,
+        uint _tradeAmount,
         uint _feeAmount,
-        uint _amountSell,
         uint _timestamp
     );
-
-    struct Order
-    {
-        uint _orderId;
-        address _trader;
-        address _tokenBuy;
-        address _tokenSell;
-        uint _amountBuy;
-        uint _amountSell;
-        uint _timestamp;
-    }
 
     constructor(address _feeAccount, uint _feePercent)
     {
         feeAccount = _feeAccount;
         feePercent = _feePercent;
+    }
+
+    modifier isMarketActive(string memory market) 
+    {
+        Market memory info = marketsTraded[market];
+        Market memory defaultInfo = Market(address(0), address(0));
+        require(keccak256(abi.encode(info)) != keccak256(abi.encode(defaultInfo)), "Invalid Market Specified.");
+        _;
+    }
+
+    function RegisterMarket(address parentToken, address childToken, string memory parentTokenSymbol, string memory childTokenSymbol) 
+    public
+    onlyOwner
+    {
+        string memory marketName = string(abi.encodePacked(parentTokenSymbol, childTokenSymbol));
+        marketsTraded[marketName] = Market(parentToken, childToken);
+    }
+
+    function isMarketEnabled(string memory market)
+    public
+    view
+    isMarketActive(market)
+    returns(bool)
+    {
+        return true;
     }
 
     function depositToken(address _token, uint _amount) 
@@ -120,70 +145,245 @@ contract Exchange{
     function balanceOf(address _token, address _user) 
     public
     view 
-        returns(uint)
+    returns(uint)
     {
         return userBalances[_token][_user];
     }
 
-    function makeOrder(address _tokenBuy, address _tokenSell, uint _amountBuy, uint _amountSell)   
+    function getOrderBookLength(Trade side, string memory market)
+    public
+    view
+    returns(uint)
+    {
+        return orderBook[market][uint(side)].length;
+    }
+
+    function limitOrder(uint amount, uint price, Trade side, string memory market) 
+    isMarketActive(market)
     public
     {
-        require(balanceOf(_tokenSell, msg.sender) >= _amountSell, "Insufficient balance.");
+        Market memory info = marketsTraded[market];
+        address parentToken = info._parentToken;
+        address tradeToken = info._tradeToken;
 
+        if(side == Trade.SELL)
+        {
+            require(userBalances[parentToken][msg.sender] >= amount, "Insufficient balance.");
+        }
+        else if(side == Trade.BUY)
+        {
+            require(userBalances[tradeToken][msg.sender] >= amount, "Insufficient balance.");
+        }
+
+        Order[] storage orders = orderBook[market][uint(side)];
         ordersCounter.increment();
-        ordersInfo[ordersCounter.current()] = Order(ordersCounter.current(), msg.sender, _tokenBuy, _tokenSell, _amountBuy, _amountSell, block.timestamp);
-        emit OrderEve(ordersCounter.current(), msg.sender, _tokenBuy, _tokenSell, _amountBuy, _amountSell, block.timestamp);
+        orders.push(Order(
+            ordersCounter.current(),
+            msg.sender,
+            side,
+            parentToken,
+            tradeToken,
+            amount,
+            0,
+            price,
+            block.timestamp
+        ));
+        sortTheArrayOrders(market, side);
+        emit OrderBookEve(orderBook[market][uint(side)]);
+        emit OrderEve(
+        ordersCounter.current(),
+        msg.sender,
+        parentToken,
+        tradeToken,
+        amount,
+        price,
+        block.timestamp
+        );
     }
 
-
-    function cancelOrder(uint _orderId) 
+    function marketOrder(uint amount, Trade side, string memory market) 
+    isMarketActive(market)
     public
     {
-        Order storage order = ordersInfo[_orderId];
-        require(order._orderId == _orderId, "Invalid trade order.");
-        require(order._trader == msg.sender, "Insufficient privileages.");
-        
+        Market memory info = marketsTraded[market];
+        address parentToken = info._parentToken;
+        address tradeToken = info._tradeToken;
 
-        ordersCancelled[_orderId] = true;
+        if(side == Trade.SELL)
+        {
+            require(userBalances[parentToken][msg.sender] >= amount, "Insufficient balance.");
+        }
+        else if(side == Trade.BUY)
+        {
+            uint currentMarketPrice = getMarketPrice(market, Trade.SELL);
+            require(userBalances[tradeToken][msg.sender] >= (currentMarketPrice <= 0 ? amount :((currentMarketPrice * amount)/(10 ** 18))), "Insufficient balance.");
+        }
 
-        emit CancelEve(order._orderId, msg.sender, order._tokenBuy, order._tokenSell, order._amountBuy, order._amountSell, block.timestamp);
+        Order[] storage orders = orderBook[market][uint(side == Trade.SELL ? Trade.BUY : Trade.SELL)];
+        uint i;
+        uint remaining = amount;
+        uint feeAmount;
+        uint lastPrice;
+
+        while(i < orders.length && remaining > 0)
+        {
+            tradesCounter.increment();
+            uint available = orders[i]._amount - orders[i]._filled;
+            uint matched = (remaining > available) ? available : remaining;
+            feeAmount = ((((matched * orders[i]._price)/(10 ** 18)) * feePercent)/(10 ** 20));
+            lastPrice = orders[i]._price;
+            if(side == Trade.SELL)
+            {
+                if(userBalances[parentToken][msg.sender] < matched)
+                {
+                    break;
+                }
+
+                userBalances[parentToken][msg.sender] -= matched;
+                userBalances[tradeToken][msg.sender] += (((matched * orders[i]._price)/(10 ** 18)) - feeAmount);
+                userBalances[tradeToken][feeAccount] += feeAmount;
+
+                userBalances[parentToken][orders[i]._trader] += matched;
+                userBalances[tradeToken][orders[i]._trader] -= ((matched * orders[i]._price)/(10 ** 18));
+            }
+            else if(side == Trade.BUY)
+            {
+                if(userBalances[tradeToken][msg.sender] < ((matched * orders[i]._price)/(10 ** 18)))
+                {
+                    break;
+                }
+
+                userBalances[parentToken][msg.sender] += (matched - feeAmount) ;
+                userBalances[parentToken][feeAccount] += feeAmount;
+                userBalances[tradeToken][msg.sender] -= ((matched * orders[i]._price)/(10 ** 18));
+
+                userBalances[parentToken][orders[i]._trader] -= matched;
+                userBalances[tradeToken][orders[i]._trader] += ((matched * orders[i]._price)/(10 ** 18));
+            }
+            remaining = remaining - matched;
+            orders[i]._filled += matched;
+            tradesCounter.increment();
+            emit TradeEve(
+                ordersCounter.current(),
+                tradesCounter.current(),
+                orders[i]._trader,
+                msg.sender,
+                matched,
+                matched,
+                block.timestamp
+            );
+            i++;
+        }
+        emit OrderBookEve(orderBook[market][uint(side)]);
+        i = 0;
+        while(i < orders.length && orders[i]._filled == orders[i]._amount)
+        {
+            for(uint j = i; j < orders.length - 1; j++)
+            {
+                orders[j] = orders[j+1];
+            }
+            orders.pop();
+        }
+        //Need to handle logic for market -> limit order price
+        if(remaining > 0)
+        {
+            limitOrder(amount, lastPrice, side, market);
+        }
     }
 
-    function fillOrder(uint _orderId) 
-    public
+    function getMarketPrice(string memory market, Trade side)
+    internal
+    view
+    returns(uint)
     {
-         Order storage order = ordersInfo[_orderId];
-         require(_orderId <= ordersCounter.current() && _orderId > 0, "Invalid Order.");
-         require(userBalances[order._tokenBuy][msg.sender] >= order._amountBuy,"Insufficient amount.");
-
-         fullFillTrade(order._orderId,order._trader,order._tokenBuy,order._tokenSell,order._amountBuy,order._amountSell);
-
-         ordersFilled[_orderId] = true;
+        if(getOrderBookLength(side, market) > 0)
+        {
+            return orderBook[market][uint(side)][0]._price;
+        }
+        return 0;
     }
 
-    function fullFillTrade(
-        uint _orderId,
-        address _trader,
-        address _tokenBuy,
-        address _tokenSell,
-        uint _amountBuy,
-        uint _amountSell
-    ) 
+    function sortTheArrayOrders(string memory info, Trade side) 
     internal
     {
-        require(!ordersCancelled[_orderId], "Order is cancelled.");
-        require(!ordersFilled[_orderId], "Order is filled already.");
+        Order[] storage orders = orderBook[info][uint(side)];
+        if(side == Trade.SELL)
+        {
+            quickSortSell(orders, int(0), int(orders.length - 1));
+        }
+        else if(side == Trade.BUY)
+        {
+            quickSortBuy(orders, int(0), int(orders.length - 1));
+        }
+        
+    }
 
-        uint feeAmount = (_amountSell * feePercent) / 100;
+    function quickSortSell(Order[] storage arr, int left, int right) 
+    internal
+    {
+        int i = left;
+        int j = right;
+        if (i == j) return;
+        uint pivot = arr[uint(left + (right - left) / 2)]._price;
+        while (i <= j) 
+        {
+            while (arr[uint(i)]._price < pivot) i++;
+            while (pivot < arr[uint(j)]._price) j--;
+            if (i <= j) 
+            {
+                Order memory val = arr[uint(i)];
+                arr[uint(i)] = arr[uint(j)];
+                arr[uint(j)] = val;
+                i++;
+                j--;
+            }
+        }
+        if (left < j)
+        {
+            quickSortSell(arr, left, j);
+        }
+        if (i < right)
+        {
+            quickSortSell(arr, i, right);
+        }
+    }
 
-        userBalances[_tokenBuy][msg.sender] -= (_amountBuy + feeAmount);
-        userBalances[_tokenBuy][_trader] += _amountBuy;
-
-        userBalances[_tokenSell][msg.sender] += (_amountSell);
-        userBalances[_tokenSell][_trader] -= _amountSell;
-
-        userBalances[_tokenBuy][feeAccount] += feeAmount;
-
-        emit TradeEve(_orderId, _trader, msg.sender, _tokenBuy, _tokenSell, _amountBuy, feeAmount, _amountSell, block.timestamp);
+    function quickSortBuy(Order[] storage arr, int left, int right) 
+    internal
+    {
+        int i = left;
+        int j = right;
+        if (i == j) return;
+        uint pivot = arr[uint(left + (right - left) / 2)]._price;
+        while (i <= j) 
+        {
+            while (arr[uint(i)]._price > pivot) i++;
+            while (pivot > arr[uint(j)]._price) j--;
+            if (i <= j) 
+            {
+                Order memory val = arr[uint(i)];
+                arr[uint(i)] = arr[uint(j)];
+                arr[uint(j)] = val;
+                i++;
+                j--;
+            }
+        }
+        if (left < j)
+        {
+            quickSortBuy(arr, left, j);
+        }
+        if (i < right)
+        {
+            quickSortBuy(arr, i, right);
+        }
     }
 }
+/*
+Todo:
+1. Check if there are any pending orders before processing any withdrawls/new-trades or orders
+2. When cancelling the order, make sure if the order is not partially fullfilled. 
+3. Merge the same price orders
+4. Enable trading with ETH <-> ERC20
+5. Store Fullfilled Trades
+6. Cnacel Trades functionality
+*/

@@ -1,5 +1,6 @@
 const { ethers } = require("hardhat");
 const { expect} = require("chai");
+const { result } = require("lodash");
 
 const tokens = (inp) => 
 {
@@ -9,7 +10,7 @@ const tokens = (inp) =>
 describe("Exchange", () => {
 
     let deployer, feeAccount, exchangeContractDeployed, trader1, trader2, trader3, deployedToken1, deployedToken2;
-    const feePercent = 10;
+    const feePercent = tokens(10);
 
     beforeEach(async () => 
     {
@@ -128,167 +129,162 @@ describe("Exchange", () => {
         });
     });
 
-
-    describe("Orders", () => 
+    describe("Market Setup",() => 
     {
-        let transaction, amount = tokens(100), response;
         describe("Success", () => 
         {
-            beforeEach(async() => 
+            it("Check if a new market is successfully create", async () => 
             {
-                await deployedToken1.connect(deployer).transfer(trader1.address, amount);
-                await deployedToken1.connect(trader1).approve(exchangeContractDeployed.address, amount);
-                await exchangeContractDeployed.connect(trader1).depositToken(deployedToken1.address, amount);
+                const parentTokenSymbol = "MINA", tradeTokenSymbol = "USDT";
+                await exchangeContractDeployed.connect(deployer).RegisterMarket(deployedToken1.address, deployedToken2.address, parentTokenSymbol, tradeTokenSymbol);
 
-                transaction = await exchangeContractDeployed.connect(trader1).makeOrder(deployedToken2.address, deployedToken1.address, amount, amount);
-                response = await transaction.wait();
+                expect(await exchangeContractDeployed.isMarketEnabled(parentTokenSymbol+tradeTokenSymbol)).to.equal(true);
             });
-
-            it("Check if the order event is emitted", () => 
-            {
-                const event = response.events[0];
-                expect(event.args._orderId).to.equal(1);
-                expect(event.args._trader).to.equal(trader1.address);
-                expect(event.args._tokenBuy).to.equal(deployedToken2.address);
-                expect(event.args._tokenSell).to.equal(deployedToken1.address);
-                expect(event.args._amountBuy).to.equal(amount);
-                expect(event.args._amountSell).to.equal(amount);
-            });
-
         });
 
         describe("Failure", () => 
         {
-            it("Rejects placing an order due to insufficient balance", async () => 
+            it("Check if a new market creation is reverted if the creator is not the exchange owner", async () => 
             {
-                await expect(exchangeContractDeployed.connect(trader2).makeOrder(deployedToken2.address, deployedToken1.address, amount, amount)).revertedWith("Insufficient balance.");
+                const parentTokenSymbol = "MINA", tradeTokenSymbol = "USDT";
+
+                await expect(exchangeContractDeployed.connect(trader1).RegisterMarket(deployedToken1.address, deployedToken2.address, parentTokenSymbol, tradeTokenSymbol)).revertedWith("Ownable: caller is not the owner");
             });
         });
     });
 
-
-    describe("Order Actions", () => 
+    describe("Order Types", () => 
     {
-        let transaction, amount = tokens(1), response;
+        let transaction, amount = tokens(100), response;
         beforeEach(async() => 
         {
             await deployedToken1.connect(deployer).transfer(trader1.address, amount);
             await deployedToken1.connect(trader1).approve(exchangeContractDeployed.address, amount);
             await exchangeContractDeployed.connect(trader1).depositToken(deployedToken1.address, amount);
-
-            transaction = await exchangeContractDeployed.connect(trader1).makeOrder(deployedToken2.address, deployedToken1.address, amount, amount);
-            response = await transaction.wait();
+            await exchangeContractDeployed.connect(deployer).RegisterMarket(deployedToken1.address, deployedToken2.address, "MINA", "USDT");
         });
 
-        describe("Cancelling Orders", () =>
+        describe("Limit Order", () => 
         {
             describe("Success", () => 
             {
                 beforeEach(async() => 
                 {
-                    transaction = await exchangeContractDeployed.connect(trader1).cancelOrder(1);
+                    await deployedToken2.connect(deployer).transfer(trader2.address, amount);
+                    await deployedToken2.connect(trader2).approve(exchangeContractDeployed.address,  amount);
+                    await exchangeContractDeployed.connect(trader2).depositToken(deployedToken2.address,  amount);
+                });
+    
+                it("Check if the limit sell order is getting placed", async () => 
+                {
+                    await exchangeContractDeployed.connect(trader1).limitOrder(tokens(15), tokens(8), 1, "MINAUSDT");
+                    
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(1, "MINAUSDT")).to.equal(1);
+                });
+
+                it("Check if the limit buy order is getting placed", async () => 
+                {
+                    await exchangeContractDeployed.connect(trader2).limitOrder(tokens(10), tokens(2), 0, "MINAUSDT");
+                    
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(0, "MINAUSDT")).to.equal(1);
+                });
+
+                it("Check if the order event is emitted", async () => 
+                {
+                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(15),tokens(8), 1, "MINAUSDT");
                     response = await transaction.wait();
+
+                    const events = response.events;
+
+                    expect(events[0].event).to.equal("OrderBookEve");
+                    expect(events[1].event).to.equal("OrderEve");
                 });
-
-                it("Check if the order is successfully cancelled", async () => 
-                {
-                    expect(await exchangeContractDeployed.ordersCancelled(1)).to.equal(true);
-                });
-
-                it("Check if the cancel event is emitted", async() => 
-                {
-                    const event = response.events[0];
-
-                    expect(event.args._orderId).to.equal(1);
-                    expect(event.args._trader).to.equal(trader1.address);
-                    expect(event.args._tokenBuy).to.equal(deployedToken2.address);
-                    expect(event.args._tokenSell).to.equal(deployedToken1.address);
-                    expect(event.args._amountBuy).to.equal(amount);
-                    expect(event.args._amountSell).to.equal(amount);
-                }); 
             });
 
             describe("Failure", () => 
             {
-                it("Check if only the real order owner is able to cancel the order", async () => 
+                it("Check if the limit buy order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.cancelOrder(1)).revertedWith("Insufficient privileages.");
+                    await expect(exchangeContractDeployed.connect(trader1).limitOrder(tokens(15), tokens(8), 0, "MINAUSDT")).revertedWith("Insufficient balance.");
                 });
 
-                it("Rejects invalid order_id's", async () => 
+                it("Check if the limit sell order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.cancelOrder(18)).revertedWith("Invalid trade order.");
+                    await expect(exchangeContractDeployed.connect(trader2).limitOrder(tokens(8), tokens(8), 1, "MINAUSDT")).revertedWith("Insufficient balance.");
+                });
+
+                it("Check if only the valid markets are allowed for trading", async () => 
+                {
+                    await expect(exchangeContractDeployed.connect(trader2).limitOrder(tokens(8), tokens(8), 1, "ETHUSDT")).revertedWith("Invalid Market Specified.");
                 });
             });
         });
 
 
-        describe("Filling Orders", () => 
-        {   
-            beforeEach(async() => 
-            {
-                await deployedToken2.connect(deployer).transfer(trader2.address, tokens(3));
-                await deployedToken2.connect(trader2).approve(exchangeContractDeployed.address,  tokens(3));
-                await exchangeContractDeployed.connect(trader2).depositToken(deployedToken2.address,  tokens(3));
-            });
+        describe("Market Order", async () => 
+        {
             describe("Success", () => 
             {
-                beforeEach(async() => 
+                beforeEach( async () => 
                 {
-                    transaction = await exchangeContractDeployed.connect(trader2).fillOrder("1");
+                    await deployedToken2.connect(deployer).transfer(trader2.address, amount);
+                    await deployedToken2.connect(trader2).approve(exchangeContractDeployed.address, amount);
+                    await exchangeContractDeployed.connect(trader2).depositToken(deployedToken2.address, amount);
+
+                    await exchangeContractDeployed.connect(trader2).limitOrder(tokens(8), tokens(3), 0, "MINAUSDT");                    
+                    await exchangeContractDeployed.connect(trader1).limitOrder(tokens(17), tokens(9), 1, "MINAUSDT");
+                    await exchangeContractDeployed.connect(trader1).limitOrder(tokens(10), tokens(2), 1, "MINAUSDT");
+                });
+                it("Check if the market sell order is getting placed and removed from the order book once fullfilled", async () => 
+                {
+                    await exchangeContractDeployed.connect(trader1).marketOrder(tokens(8), 1, "MINAUSDT");
+                    
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(0, "MINAUSDT")).to.equal(0);
+                });
+
+                it("Check if the market buy order is getting placed and removed from the order book once fullfilled", async () => 
+                {
+                    await exchangeContractDeployed.connect(trader2).marketOrder(tokens(10), 0, "MINAUSDT");
+
+                    expect(await exchangeContractDeployed.connect(deployer).getOrderBookLength(1, "MINAUSDT")).to.equal(1);
+                });
+
+                it("Check if the order event is emitted", async () => 
+                {
+                    transaction = await exchangeContractDeployed.connect(trader2).marketOrder(tokens(10), 0, "MINAUSDT");
                     response = await transaction.wait();
+
+                    const events = response.events;
+                    expect(events[0].event).to.equal("TradeEve");
                 });
-               it("Check if the order is successfully execited", async () => 
-               {
-                    expect(await exchangeContractDeployed.balanceOf(deployedToken1.address, trader1.address)).equal(tokens(0));
-                    expect(await exchangeContractDeployed.balanceOf(deployedToken1.address, trader2.address)).equal(tokens(1));
-                    expect(await exchangeContractDeployed.balanceOf(deployedToken1.address, feeAccount.address)).equal(tokens(0));
-
-                    expect(await exchangeContractDeployed.balanceOf(deployedToken2.address, trader1.address)).equal(tokens(1));
-                    expect(await exchangeContractDeployed.balanceOf(deployedToken2.address, trader2.address)).equal(tokens(1.9));
-                    expect(await exchangeContractDeployed.balanceOf(deployedToken2.address, feeAccount.address)).equal(tokens(0.1)); 
-               });
-
-               it("Check if the trade event is emitted", async() => 
+    
+                it("Check the market order", async () => 
                 {
-                    const event = response.events[0];
-
-                    expect(event.args._orderId).to.equal(1);
-                    expect(event.args._orderMaker).to.equal(trader1.address);
-                    expect(event.args._orderTaker).to.equal(trader2.address);
-                    expect(event.args._tokenBuy).to.equal(deployedToken2.address);
-                    expect(event.args._tokenSell).to.equal(deployedToken1.address);
-                    expect(event.args._amountBuy).to.equal(tokens(1));
-                    expect(event.args._amountSell).to.equal(tokens(1));
-                    expect(event.args._feeAmount).to.equal(tokens(0.1));
+                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(10), tokens(16), 1, "MINAUSDT");
+                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(5), tokens(10), 1, "MINAUSDT");
+                    transaction = await exchangeContractDeployed.connect(trader1).limitOrder(tokens(2), tokens(12), 1, "MINAUSDT");
                 });
-
-                it("Check for the filled Orders", async() =>
-                {
-                    expect(await exchangeContractDeployed.ordersFilled("1")).to.equal(true);
-                });
+    
             });
 
             describe("Failure", () => 
             {
-                it("Check for invalid Orders", async () => 
+                it("Check if the market buy order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await expect(exchangeContractDeployed.connect(trader2).fillOrder(99)).revertedWith("Invalid Order.");
+                    await expect(exchangeContractDeployed.connect(trader1).marketOrder(tokens(15), 0, "MINAUSDT")).revertedWith("Insufficient balance.");
                 });
 
-                it("Check for filled Orders", async () => 
+                it("Check if the market sell order is getting rejected if it is placed without token balance", async () => 
                 {
-                    await exchangeContractDeployed.connect(trader2).fillOrder(1);
-                    await expect(exchangeContractDeployed.connect(trader2).fillOrder(1)).revertedWith("Order is filled already.");
+                    await expect(exchangeContractDeployed.connect(trader2).marketOrder(tokens(26), 1, "MINAUSDT")).revertedWith("Insufficient balance.");
                 });
 
-                it("Check for cancelled Orders", async () => 
+                it("Check if only the valid markets are allowed for trading", async () => 
                 {
-                    await exchangeContractDeployed.connect(trader1).cancelOrder(1);
-                    await expect(exchangeContractDeployed.connect(trader2).fillOrder(1)).revertedWith("Order is cancelled.");
+                    await expect(exchangeContractDeployed.connect(trader2).marketOrder(tokens(8), 1, "ETHUSDT")).revertedWith("Invalid Market Specified.");
                 });
-
             });
         });
-    });  
+        
+    })
 });
