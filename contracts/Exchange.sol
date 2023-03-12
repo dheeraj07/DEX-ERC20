@@ -309,16 +309,16 @@ contract Exchange is Ownable{
         Order[] storage orders = orderBook[info][uint(side)];
         if(side == Trade.SELL)
         {
-            quickSortSell(orders, int(0), int(orders.length - 1));
+            quickSort(orders, int(0), int(orders.length - 1), false);
         }
         else if(side == Trade.BUY)
         {
-            quickSortBuy(orders, int(0), int(orders.length - 1));
+            quickSort(orders, int(0), int(orders.length - 1), true);
         }
         
     }
 
-    function quickSortSell(Order[] storage arr, int left, int right) 
+    function quickSort(Order[] storage arr, int left, int right, bool isBuy) 
     internal
     {
         int i = left;
@@ -327,8 +327,16 @@ contract Exchange is Ownable{
         uint pivot = arr[uint(left + (right - left) / 2)]._price;
         while (i <= j) 
         {
-            while (arr[uint(i)]._price < pivot) i++;
-            while (pivot < arr[uint(j)]._price) j--;
+            if (isBuy) 
+            {
+                while (arr[uint(i)]._price > pivot) i++;
+                while (pivot > arr[uint(j)]._price) j--;
+            } 
+            else 
+            {
+                while (arr[uint(i)]._price < pivot) i++;
+                while (pivot < arr[uint(j)]._price) j--;
+            }
             if (i <= j) 
             {
                 Order memory val = arr[uint(i)];
@@ -340,41 +348,11 @@ contract Exchange is Ownable{
         }
         if (left < j)
         {
-            quickSortSell(arr, left, j);
+            quickSort(arr, left, j, isBuy);
         }
         if (i < right)
         {
-            quickSortSell(arr, i, right);
-        }
-    }
-
-    function quickSortBuy(Order[] storage arr, int left, int right) 
-    internal
-    {
-        int i = left;
-        int j = right;
-        if (i == j) return;
-        uint pivot = arr[uint(left + (right - left) / 2)]._price;
-        while (i <= j) 
-        {
-            while (arr[uint(i)]._price > pivot) i++;
-            while (pivot > arr[uint(j)]._price) j--;
-            if (i <= j) 
-            {
-                Order memory val = arr[uint(i)];
-                arr[uint(i)] = arr[uint(j)];
-                arr[uint(j)] = val;
-                i++;
-                j--;
-            }
-        }
-        if (left < j)
-        {
-            quickSortBuy(arr, left, j);
-        }
-        if (i < right)
-        {
-            quickSortBuy(arr, i, right);
+            quickSort(arr, i, right, isBuy);
         }
     }
 }
